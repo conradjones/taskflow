@@ -290,6 +290,10 @@ class Runtime {
   */
   inline void corun_all();
 
+  /**
+  @brief TODO add something here*/
+  inline bool is_cancelled();
+
   protected:
   
   /**
@@ -372,6 +376,11 @@ inline void Runtime::corun_all() {
     });
   }
   _parent->_rethrow_exception();
+}
+
+
+inline bool Runtime::is_cancelled() {
+  return _parent->_is_cancelled();
 }
 
 // ------------------------------------
