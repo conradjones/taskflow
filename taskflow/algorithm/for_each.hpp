@@ -4,10 +4,13 @@
 
 namespace tf {
 
+template <typename C, typename B>
+constexpr bool is_runtime_foreach_task_v = std::is_invocable_r_v<void, C, Runtime&, typename std::iterator_traits<std::decay_t<B>>::value_type>;
+
 // Function: make_for_each_task
 template <typename B, typename E, typename C, typename P = DefaultPartitioner>
 auto make_for_each_task(B b, E e, C c, P part = P()) {
-  
+
   using namespace std::string_literals;
 
   using B_t = std::decay_t<unwrap_ref_decay_t<B>>;
@@ -24,17 +27,21 @@ auto make_for_each_task(B b, E e, C c, P part = P()) {
 
     // the workload is sequentially doable
     if(W <= 1 || N <= part.chunk_size()) {
-      part([=](){ std::for_each(beg, end, c); })();
+      if constexpr ( is_runtime_foreach_task_v<C,B>) {
+        part([=](){ std::for_each(beg, end, std::bind(c, rt, std::placeholders::_1 )); })();
+      } else {
+        part([=](){ std::for_each(beg, end, c); })();
+      }
       return;
     }
-    
+
     PreemptionGuard preemption_guard(rt);
-    
+
     // use no more workers than the iteration count
     if(N < W) {
       W = N;
     }
-    
+
     // static partitioner
     if constexpr(part.type() == PartitionerType::STATIC) {
       for(size_t w=0, curr_b=0; w<W && curr_b < N;) {
@@ -44,11 +51,15 @@ auto make_for_each_task(B b, E e, C c, P part = P()) {
             [=, prev_e=size_t{0}](size_t part_b, size_t part_e) mutable {
               std::advance(beg, part_b - prev_e);
               for(size_t x = part_b; x<part_e; x++) {
-                c(*beg++);
+                if constexpr ( is_runtime_foreach_task_v<C,B>) {
+                  c(rt, *beg++);
+                } else {
+                  c(*beg++);
+                }
               }
               prev_e = part_e;
             }
-          ); 
+          );
         });
         (++w == W || (curr_b += chunk_size) >= N) ? task() : rt.silent_async(task);
       }
@@ -58,11 +69,15 @@ auto make_for_each_task(B b, E e, C c, P part = P()) {
       auto next = std::make_shared<std::atomic<size_t>>(0);
       for(size_t w=0; w<W;) {
         auto task = part([=] () mutable {
-          part.loop(N, W, *next, 
+          part.loop(N, W, *next,
             [=, prev_e=size_t{0}](size_t part_b, size_t part_e) mutable {
               std::advance(beg, part_b - prev_e);
               for(size_t x = part_b; x<part_e; x++) {
-                c(*beg++);
+                if constexpr ( is_runtime_foreach_task_v<C,B>) {
+                  c(rt, *beg++);
+                } else {
+                  c(*beg++);
+                }
               }
               prev_e = part_e;
             }
@@ -78,7 +93,7 @@ auto make_for_each_task(B b, E e, C c, P part = P()) {
 // Function: make_for_each_index_task
 template <typename B, typename E, typename S, typename C, typename P = DefaultPartitioner>
 auto make_for_each_index_task(B b, E e, S s, C c, P part = P()){
-  
+
   using namespace std::string_literals;
 
   using B_t = std::decay_t<unwrap_ref_decay_t<B>>;
@@ -91,7 +106,7 @@ auto make_for_each_index_task(B b, E e, S s, C c, P part = P()){
     B_t beg = b;
     E_t end = e;
     S_t inc = s;
-    
+
     // nothing to be done if the range is invalid
     if(is_index_range_invalid(beg, end, inc)) {
       return;
@@ -111,11 +126,11 @@ auto make_for_each_index_task(B b, E e, S s, C c, P part = P()){
     }
 
     PreemptionGuard preemption_guard(rt);
-    
+
     if(N < W) {
       W = N;
     }
-    
+
     // static partitioner
     if constexpr(part.type() == PartitionerType::STATIC) {
       for(size_t w=0, curr_b=0; w<W && curr_b < N;) {
@@ -152,14 +167,14 @@ auto make_for_each_index_task(B b, E e, S s, C c, P part = P()){
 // Function: make_for_each_index_task
 template <typename R, typename C, typename P = DefaultPartitioner>
 auto make_for_each_index_task(R range, C c, P part = P()){
-  
+
   using range_type = std::decay_t<unwrap_ref_decay_t<R>>;
 
   return [=] (Runtime& rt) mutable {
 
     // fetch the iterator values
     range_type r = range;
-    
+
     // nothing to be done if the range is invalid
     if(is_index_range_invalid(r.begin(), r.end(), r.step_size())) {
       return;
@@ -175,11 +190,11 @@ auto make_for_each_index_task(R range, C c, P part = P()){
     }
 
     PreemptionGuard preemption_guard(rt);
-    
+
     if(N < W) {
       W = N;
     }
-    
+
     // static partitioner
     if constexpr(part.type() == PartitionerType::STATIC) {
       for(size_t w=0, curr_b=0; w<W && curr_b < N;) {
